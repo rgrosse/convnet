@@ -938,7 +938,7 @@ class CUDAMatrix(object):
 
         return target
  
-    def sum(self, axis=None, target = None, mult=1.0):
+    def sum(self, axis=None, target = None, mult=1.0, scale_targets=0.):
         """
         Sum the matrix along the given dimension, where 0 represents the leading
         dimension and 1 represents the non-leading dimension. If None, the sum
@@ -953,9 +953,10 @@ class CUDAMatrix(object):
               raise generate_exception(err_code)
           return res
           """
+          assert scale_targets == 0.
           return vdot(self, CUDAMatrix.ones.slice(0, self.shape[0]*self.shape[1])) * mult
         else:
-          return sum(self, axis, target, mult)
+          return sum(self, axis, target, mult, scale_targets=scale_targets)
 
     def sum_along_cols(self, target = None, mult=1.0):
         """
@@ -1896,7 +1897,7 @@ def empty_like(m):
     cmat.set_shape4d(m.shape4d)
     return cmat
 
-def sum(mat, axis, target = None, mult=1.0):
+def sum(mat, axis, target = None, mult=1.0, scale_targets=0.):
     """
     Sum the matrix along the given dimension, where 0 represents the leading
     dimension and 1 represents the non-leading dimension. If a target is
@@ -1923,7 +1924,7 @@ def sum(mat, axis, target = None, mult=1.0):
         if not target:
             target = empty((m, 1))
 
-    err_code = _cudamat.dot(left.p_mat, right.p_mat, target.p_mat, ct.c_float(0.), ct.c_float(mult))
+    err_code = _cudamat.dot(left.p_mat, right.p_mat, target.p_mat, ct.c_float(scale_targets), ct.c_float(mult))
     if err_code:
         raise generate_exception(err_code)
 
