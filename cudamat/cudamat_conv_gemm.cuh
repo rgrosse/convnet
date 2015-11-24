@@ -48,6 +48,14 @@ void convOutpGemm(cudamat* images, cudamat* derivs, cudamat* targets,
                   Shape4D* targets_shape, ConvDesc conv_desc,
                   float scaleTargets, float scaleOutput);
 
+void convCovarianceGemm(cudamat* images, cudamat* targets,
+                        Shape4D* images_shape, Shape4D* targets_shape,
+                        ConvDesc conv_desc, float scaleTargets, float scaleOutput);
+
+void convCovariance2Gemm(cudamat* images, cudamat* images2, cudamat* targets,
+                         Shape4D* images_shape, Shape4D* images2_shape, Shape4D* targets_shape,
+                         ConvDesc conv_desc, float scaleTargets, float scaleOutput);
+
 void convInnerpGemm(cudamat* images, cudamat* derivs, cudamat* targets,
                     Shape4D* images_shape, Shape4D* derivs_shape,
                     Shape4D* targets_shape, ConvDesc conv_desc,
