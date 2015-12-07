@@ -959,8 +959,8 @@ void _convOutpGemm(cudamat* images, cudamat* derivs, cudamat* targets,
     getLastCudaError("convOutpGemm: kernel execution failed");
 }
 
-void _convCovarianceGemm(cudamat* images, cudamat* targets,
-                         Shape4D images_shape, Shape4D targets_shape,
+void _convCovarianceGemm(cudamat* images, cudamat* y1_targets, cudamat* y2_targets,
+                         Shape4D images_shape, Shape4D y2_targets_shape,
                          ConvDesc conv_desc, float scaleTargets, float scaleOutput) {
 
     int num_input_channels   = conv_desc.num_input_channels;
@@ -984,21 +984,21 @@ void _convCovarianceGemm(cudamat* images, cudamat* targets,
     int num_modules_x        = image_size_x;
     int num_modules          = num_modules_y * num_modules_x;
 
-    int num_input_channels3  = targets_shape.shape[3];
-    int kernel_size_xy       = targets_shape.shape[2];
-    int kernel_size_xy2      = targets_shape.shape[1];
-    int num_input_channels4  = targets_shape.shape[0];
+    int num_input_channels3  = y2_targets_shape.shape[3];
+    int kernel_size_xy       = y2_targets_shape.shape[2];
+    int kernel_size_xy2      = y2_targets_shape.shape[1];
+    int num_input_channels4  = y2_targets_shape.shape[0];
 
-    
   
     // Consistency checks.
     assert (num_input_channels == num_input_channels2);
     assert (input_channel_end - input_channel_begin == num_input_channels3);
-    assert (input_channel_end - input_channel_begin == num_input_channels4);
+    assert (num_input_channels3 == num_input_channels4);
     assert (kernel_size_xy == kernel_size_x * kernel_size_y);
     assert (kernel_size_xy2 == kernel_size_xy);
     assert (image_size_y * image_size_x * num_input_channels2 == images->size[1]);
-    assert (kernel_size_xy * num_input_channels3 == targets->size[1]);
+    assert (kernel_size_xy * num_input_channels3 == y2_targets->size[1]);
+    assert (kernel_size_xy * num_input_channels3 == y1_targets->size[0] * y1_targets->size[1]);
     assert (num_input_channels % num_groups == 0);
     assert (num_groups == 1);
     assert (input_channel_begin  >= 0);
@@ -1007,13 +1007,14 @@ void _convCovarianceGemm(cudamat* images, cudamat* targets,
     if (input_channel_end == 0) input_channel_end = num_input_channels;
     num_input_channels = input_channel_end - input_channel_begin;
     assert(num_input_channels  > 0);
-    float* Sigma = targets->data_device;
+    float* Sigma = y2_targets->data_device;
+    float* mu = y1_targets->data_device;
     float* images_data = images->data_device + input_channel_begin * image_size_y * image_size_x * num_images;
     
     int input_size = kernel_size_y * kernel_size_x * num_input_channels;
     int num_threads_x = MIN(num_images, NUM_THREADS_PER_BLOCK);
     
-    float *expanded_images = NULL;
+    float *expanded_images = NULL, *ones = NULL;
     int num_modules_batch;
 
     int input_memory_size  = num_images * input_size * sizeof(float);
@@ -1023,18 +1024,31 @@ void _convCovarianceGemm(cudamat* images, cudamat* targets,
     max_batch_size = MIN(max_batch_size, MAX_BLOCKS_X);
     max_batch_size = MAX(max_batch_size, 1);
 
+    int num_ones = num_images * max_batch_size;
+    int ones_size = num_ones * sizeof(float);
+    
+
     cudaError_t err1, err2;
+    //printf("A\n");
+    //getLastCudaError("convCovarianceGemm: kernel execution failed [A]");
     err1 = cudaMalloc((void**)&expanded_images,  max_batch_size * input_memory_size);
-    if (cudaSuccess != err1) {
+    err2 = cudaMalloc((void**)&ones, ones_size);
+    if (cudaSuccess != err1 || cudaSuccess != err2) {
       printf("Out of memory.\n");
       num_modules_batch = 1;
     } else {
       num_modules_batch = max_batch_size;
     }
 
+    kSetOnes<<<1, 512>>>(ones, num_ones);
+
     int num_iter = DIVUP(num_modules, num_modules_batch);
 
-    _Scale(targets, scaleTargets);
+    _Scale(y1_targets, scaleTargets);
+    _Scale(y2_targets, scaleTargets);
+
+    //printf("B\n");
+    //getLastCudaError("convCovarianceGemm: kernel execution failed [B]");
 
     int module_id_start = 0;
     dim3 threads(num_threads_x);
@@ -1051,6 +1065,9 @@ void _convCovarianceGemm(cudamat* images, cudamat* targets,
                                    padding_y, padding_x,
                                    stride_y, stride_x,
                                    this_num_modules_batch, module_id_start);
+
+      //printf("C\n");
+      //getLastCudaError("convCovarianceGemm: kernel execution failed [C]");
       cublasSgemm('t', 'n', 
                   input_size,
                   input_size,
@@ -1058,13 +1075,30 @@ void _convCovarianceGemm(cudamat* images, cudamat* targets,
                   scaleOutput, expanded_images, num_images * this_num_modules_batch,
                   expanded_images, num_images * this_num_modules_batch,
                   1, Sigma, input_size);
+
       if (check_cublas_error()) {
-        printf("Error in dot or before it.\n");
+        printf("Error in sgemm or before it.\n");
+      }
+
+      //printf("D\n");
+      //getLastCudaError("convCovarianceGemm: kernel execution failed [D]");
+      cublasSgemv('t',
+                  num_images * this_num_modules_batch,
+                  input_size,
+                  scaleOutput, expanded_images, num_images * this_num_modules_batch,
+                  ones, 1, 1, mu, 1);
+      //printf("E\n");
+      
+      if (check_cublas_error()) {
+        printf("Error in sgemv or before it.\n");
       }
       module_id_start += this_num_modules_batch;
     }
+    //getLastCudaError("convCovarianceGemm: kernel execution failed (before freeing ones)");
+    cudaFree(ones);
+    //getLastCudaError("convCovarianceGemm: kernel execution failed (after freeing ones)");
     cudaFree(expanded_images);
-    getLastCudaError("convCovarianceGemm: kernel execution failed");
+    getLastCudaError("convCovarianceGemm: kernel execution failed (final)");
 }
 
 
@@ -1671,10 +1705,10 @@ void convOutpGemm(cudamat* images, cudamat* derivs, cudamat* targets,
               *targets_shape, conv_desc, scaleTargets, scaleOutput, true);
 }
 
-void convCovarianceGemm(cudamat* images, cudamat* targets,
-                        Shape4D* images_shape, Shape4D* targets_shape,
+void convCovarianceGemm(cudamat* images, cudamat* y1_targets, cudamat* y2_targets,
+                        Shape4D* images_shape, Shape4D* y2_targets_shape,
                         ConvDesc conv_desc, float scaleTargets, float scaleOutput) {
-  _convCovarianceGemm(images, targets, *images_shape, *targets_shape, conv_desc,
+  _convCovarianceGemm(images, y1_targets, y2_targets, *images_shape, *y2_targets_shape, conv_desc,
                       scaleTargets, scaleOutput);
 }
 

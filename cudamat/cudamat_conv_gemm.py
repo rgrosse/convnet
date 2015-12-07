@@ -74,9 +74,9 @@ def convOutp(images, hidSums, targets, conv_desc, scaleTargets=0, scaleGradients
     images.p_shape4d, hidSums.p_shape4d, targets.p_shape4d,
     conv_desc, ct.c_float(scaleTargets), ct.c_float(scaleGradients))
 
-def convCovariance(images, targets, conv_desc, scaleTargets=0, scaleGradients=1):
+def convCovariance(images, y1_targets, y2_targets, conv_desc, scaleTargets=0, scaleGradients=1):
   _ConvNet.convCovarianceGemm(
-    images.p_mat, targets.p_mat, images.p_shape4d, targets.p_shape4d,
+    images.p_mat, y1_targets.p_mat, y2_targets.p_mat, images.p_shape4d, y2_targets.p_shape4d,
     conv_desc, ct.c_float(scaleTargets), ct.c_float(scaleGradients))
 
 def convCovariance2(images, images2, targets, conv_desc, scaleTargets=0, scaleGradients=1):
